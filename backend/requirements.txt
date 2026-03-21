@@ -6,3 +6,4 @@ sqlalchemy>=2.0
 aiosqlite>=0.19
 python-multipart>=0.0.6
 requests>=2.31
+kubernetes>=29.0

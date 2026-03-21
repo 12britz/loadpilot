@@ -1047,3 +1047,217 @@ async def ai_decision(test_id: str):
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+
+# Kubernetes Integration Endpoints
+
+from k8s_client import kubernetes_client, PodConfig, ClusterStatus
+
+k8s_deployments = {}
+
+
+@app.get("/api/k8s/status")
+async def get_k8s_status():
+    """Get Kubernetes cluster connection status."""
+    return {
+        "status": kubernetes_client.status.value,
+        "cluster_info": kubernetes_client.cluster_info
+    }
+
+
+@app.post("/api/k8s/connect")
+async def connect_k8s(kubeconfig_path: Optional[str] = None, namespace: str = "default"):
+    """Connect to Kubernetes cluster."""
+    result = kubernetes_client.check_connection(kubeconfig_path)
+    
+    if result.get("status") == "error":
+        raise HTTPException(status_code=400, detail=result.get("error", "Connection failed"))
+    
+    return {
+        "message": "Connected successfully",
+        "cluster_info": result,
+        "namespaces": kubernetes_client.get_namespaces()
+    }
+
+
+@app.post("/api/k8s/disconnect")
+async def disconnect_k8s():
+    """Disconnect from Kubernetes cluster."""
+    kubernetes_client.disconnect()
+    return {"message": "Disconnected"}
+
+
+@app.get("/api/k8s/namespaces")
+async def get_k8s_namespaces():
+    """Get list of namespaces."""
+    namespaces = kubernetes_client.get_namespaces()
+    return {"namespaces": namespaces}
+
+
+@app.post("/api/k8s/deploy")
+async def deploy_k8s_test(
+    name: str,
+    cpu_millicores: int = 500,
+    memory_mb: int = 512,
+    replicas: int = 1,
+    image: str = "nginx",
+    namespace: str = "default"
+):
+    """Deploy test pods to Kubernetes cluster."""
+    if kubernetes_client.status != ClusterStatus.CONNECTED:
+        raise HTTPException(status_code=400, detail="Not connected to cluster")
+    
+    config = PodConfig(
+        name=name,
+        cpu_millicores=cpu_millicores,
+        memory_mb=memory_mb,
+        image=image,
+        replicas=replicas
+    )
+    
+    result = kubernetes_client.deploy_test_pods(config, namespace)
+    
+    if result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=result.get("error"))
+    
+    deployment_id = str(uuid.uuid4())
+    k8s_deployments[deployment_id] = {
+        "id": deployment_id,
+        "name": name,
+        "deployment": result["deployment"],
+        "service": result["service"],
+        "namespace": namespace,
+        "config": config.__dict__,
+        "status": "deployed",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    
+    return {
+        "deployment_id": deployment_id,
+        "details": result,
+        "message": "Test pods deployed successfully"
+    }
+
+
+@app.get("/api/k8s/deployments")
+async def list_k8s_deployments():
+    """List all LoadPilot deployments."""
+    return {"deployments": list(k8s_deployments.values())}
+
+
+@app.get("/api/k8s/deployments/{deployment_id}")
+async def get_k8s_deployment(deployment_id: str):
+    """Get details of a specific deployment."""
+    if deployment_id not in k8s_deployments:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    
+    dep = k8s_deployments[deployment_id]
+    metrics = kubernetes_client.get_pod_metrics(dep["namespace"])
+    
+    return {
+        "deployment": dep,
+        "metrics": metrics
+    }
+
+
+@app.delete("/api/k8s/deployments/{deployment_id}")
+async def delete_k8s_deployment(deployment_id: str):
+    """Delete a LoadPilot deployment."""
+    if deployment_id not in k8s_deployments:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    
+    dep = k8s_deployments[deployment_id]
+    success = kubernetes_client.delete_test_resources(
+        dep["deployment"],
+        dep["service"],
+        dep["namespace"]
+    )
+    
+    if success:
+        del k8s_deployments[deployment_id]
+        return {"message": "Deployment deleted"}
+    
+    raise HTTPException(status_code=500, detail="Failed to delete deployment")
+
+
+@app.post("/api/k8s/deployments/{deployment_id}/scale")
+async def scale_k8s_deployment(deployment_id: str, replicas: int):
+    """Scale a deployment."""
+    if deployment_id not in k8s_deployments:
+        raise HTTPException(status_code=404, detail="Deployment not found")
+    
+    dep = k8s_deployments[deployment_id]
+    success = kubernetes_client.scale_deployment(
+        dep["deployment"],
+        replicas,
+        dep["namespace"]
+    )
+    
+    if success:
+        dep["config"]["replicas"] = replicas
+        return {"message": f"Scaled to {replicas} replicas"}
+    
+    raise HTTPException(status_code=500, detail="Failed to scale deployment")
+
+
+@app.get("/api/k8s/metrics")
+async def get_k8s_metrics(namespace: str = "default"):
+    """Get cluster metrics."""
+    if kubernetes_client.status != ClusterStatus.CONNECTED:
+        raise HTTPException(status_code=400, detail="Not connected to cluster")
+    
+    return kubernetes_client.get_pod_metrics(namespace)
+
+
+@app.post("/api/k8s/run-test")
+async def run_k8s_load_test(
+    name: str,
+    cpu_millicores: int = 500,
+    memory_mb: int = 512,
+    replicas: int = 1,
+    threads: int = 100,
+    duration: int = 60,
+    namespace: str = "default",
+    jmx_file: UploadFile = File(None)
+):
+    """Run a load test on Kubernetes cluster with specific config."""
+    if kubernetes_client.status != ClusterStatus.CONNECTED:
+        raise HTTPException(status_code=400, detail="Not connected to cluster")
+    
+    config = PodConfig(
+        name=f"{name}-{uuid.uuid4().hex[:8]}",
+        cpu_millicores=cpu_millicores,
+        memory_mb=memory_mb,
+        image="nginx",
+        replicas=replicas
+    )
+    
+    deploy_result = kubernetes_client.deploy_test_pods(config, namespace)
+    
+    if deploy_result.get("status") == "error":
+        raise HTTPException(status_code=500, detail=deploy_result.get("error"))
+    
+    test_id = str(uuid.uuid4())
+    
+    cost = calculate_monthly_cost(
+        cpu_millicores, memory_mb, replicas, "aws", "us-east-1"
+    )
+    
+    k8s_deployments[test_id] = {
+        "id": test_id,
+        "name": name,
+        "deployment": deploy_result["deployment"],
+        "service": deploy_result["service"],
+        "namespace": namespace,
+        "config": config.__dict__,
+        "pod_ips": deploy_result.get("pod_ips", []),
+        "status": "testing",
+        "created_at": datetime.utcnow().isoformat()
+    }
+    
+    return {
+        "test_id": test_id,
+        "deployment": deploy_result,
+        "cost_monthly": cost,
+        "message": "Test pods deployed. Run load test against pod IPs."
+    }

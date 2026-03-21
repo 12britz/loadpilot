@@ -407,6 +407,122 @@ function SystemStatus({ onOpenSettings }) {
   )
 }
 
+function K8sTab() {
+  const [k8sStatus, setK8sStatus] = useState(null)
+  const [deployments, setDeployments] = useState([])
+  const [connecting, setConnecting] = useState(false)
+  const [deploying, setDeploying] = useState(false)
+  const [namespace, setNamespace] = useState('default')
+  const [form, setForm] = useState({ name: 'load-test', cpu: 500, memory: 512, replicas: 2, image: 'nginx' })
+
+  const fetchStatus = () => {
+    fetch(`${API}/k8s/status`).then(r => r.json()).then(setK8sStatus)
+    fetch(`${API}/k8s/deployments`).then(r => r.json()).then(d => setDeployments(d.deployments || [])).catch(() => {})
+  }
+
+  useEffect(() => { fetchStatus() }, [])
+
+  const handleConnect = async () => {
+    setConnecting(true)
+    try {
+      await fetch(`${API}/k8s/connect?namespace=${namespace}`, { method: 'POST' })
+      fetchStatus()
+    } catch (e) { console.error(e) }
+    setConnecting(false)
+  }
+
+  const handleDisconnect = async () => {
+    await fetch(`${API}/k8s/disconnect`, { method: 'POST' })
+    fetchStatus()
+  }
+
+  const handleDeploy = async () => {
+    setDeploying(true)
+    try {
+      await fetch(`${API}/k8s/deploy?name=${form.name}&cpu_millicores=${form.cpu}&memory_mb=${form.memory}&replicas=${form.replicas}&image=${form.image}&namespace=${namespace}`, { method: 'POST' })
+      fetchStatus()
+    } catch (e) { console.error(e) }
+    setDeploying(false)
+  }
+
+  const handleDelete = async (id) => {
+    if (!confirm('Delete this deployment?')) return
+    await fetch(`${API}/k8s/deployments/${id}`, { method: 'DELETE' })
+    fetchStatus()
+  }
+
+  const handleScale = async (id, replicas) => {
+    await fetch(`${API}/k8s/deployments/${id}/scale?replicas=${replicas}`, { method: 'POST' })
+    fetchStatus()
+  }
+
+  const isConnected = k8sStatus?.status === 'connected'
+
+  return (
+    <div>
+      <Card title="Kubernetes Cluster">
+        <div style={{ display: 'flex', alignItems: 'center', gap: 16, marginBottom: 16 }}>
+          <div style={{ padding: '8px 16px', background: isConnected ? 'rgba(34, 197, 94, 0.1)' : 'rgba(239, 68, 68, 0.1)', borderRadius: 20, fontSize: 13, display: 'flex', alignItems: 'center', gap: 8 }}>
+            <div style={{ width: 8, height: 8, borderRadius: '50%', background: isConnected ? '#22c55e' : '#ef4444' }} />
+            K8s: {isConnected ? `Connected (${k8sStatus?.cluster_info?.nodes || 0} nodes)` : 'Disconnected'}
+          </div>
+          <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+            <Input label="Namespace" value={namespace} onChange={setNamespace} placeholder="default" />
+            {!isConnected ? (
+              <Button onClick={handleConnect} loading={connecting} style={{ marginTop: 18 }}>Connect</Button>
+            ) : (
+              <Button onClick={handleDisconnect} variant="danger" style={{ marginTop: 18 }}>Disconnect</Button>
+            )}
+          </div>
+        </div>
+      </Card>
+
+      {isConnected && (
+        <Card title="Deploy Test Pods">
+          <div className="grid grid-2">
+            <Input label="Test Name" value={form.name} onChange={v => setForm({...form, name: v})} placeholder="load-test" />
+            <Input label="Docker Image" value={form.image} onChange={v => setForm({...form, image: v})} placeholder="nginx" />
+          </div>
+          <div className="grid grid-3">
+            <Input label="CPU (m)" type="number" value={form.cpu} onChange={v => setForm({...form, cpu: parseInt(v)})} />
+            <Input label="Memory (MB)" type="number" value={form.memory} onChange={v => setForm({...form, memory: parseInt(v)})} />
+            <Input label="Replicas" type="number" value={form.replicas} onChange={v => setForm({...form, replicas: parseInt(v)})} />
+          </div>
+          <div style={{ padding: 12, background: 'rgba(34, 197, 94, 0.1)', borderRadius: 10, marginBottom: 16, fontSize: 13 }}>
+            Monthly cost estimate: <strong>${((form.cpu / 1000 * 0.031 + form.memory / 1024 * 0.0144) * form.replicas * 730).toFixed(2)}</strong> (AWS us-east-1)
+          </div>
+          <Button onClick={handleDeploy} loading={deploying} variant="success">Deploy Pods</Button>
+        </Card>
+      )}
+
+      {deployments.length > 0 && (
+        <Card title="Deployments">
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {deployments.map(dep => (
+              <div key={dep.id} style={{ padding: 16, background: 'var(--bg-tertiary)', borderRadius: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'start', marginBottom: 8 }}>
+                  <div>
+                    <div style={{ fontWeight: 600 }}>{dep.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--text-muted)' }}>
+                      {dep.namespace} • {dep.config?.cpu_millicores || 0}m CPU • {dep.config?.memory_mb || 0}MB RAM • {dep.config?.replicas || 0} replicas
+                    </div>
+                  </div>
+                  <StatusBadge status={dep.status} />
+                </div>
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <Button size="sm" variant="secondary" onClick={() => handleScale(dep.id, (dep.config?.replicas || 0) + 1)}>+1 Replica</Button>
+                  <Button size="sm" variant="secondary" onClick={() => handleScale(dep.id, Math.max(1, (dep.config?.replicas || 0) - 1))}>-1 Replica</Button>
+                  <Button size="sm" variant="danger" onClick={() => handleDelete(dep.id)}>Delete</Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  )
+}
+
 function SettingsModal({ isOpen, onClose }) {
   const [ollama, setOllama] = useState(null)
   const [selectedModel, setSelectedModel] = useState('')
@@ -584,32 +700,36 @@ export default function Dashboard() {
       <SettingsModal isOpen={showSettings} onClose={() => setShowSettings(false)} />
       
       <div style={{ display: 'flex', gap: 8, marginBottom: 24 }}>
-        {['jmx', 'matrix', 'interactive'].map(tab => (
+        {['jmx', 'matrix', 'interactive', 'k8s'].map(tab => (
           <button key={tab} onClick={() => setActiveTab(tab)} style={{
             padding: '10px 20px', background: activeTab === tab ? 'var(--primary)' : 'var(--bg-tertiary)',
-            color: activeTab === tab ? 'white' : 'var(--text-secondary)', border: 'none', borderRadius: 10, fontWeight: 500, cursor: 'pointer', textTransform: 'capitalize',
-          }}>{tab === 'jmx' ? 'JMX Test' : tab === 'matrix' ? 'Matrix Test' : 'Interactive'}</button>
+            color: activeTab === tab ? 'white' : 'var(--text-secondary)', border: 'none', borderRadius: 10, fontWeight: 500, cursor: 'pointer',
+          }}>{tab === 'jmx' ? 'JMX Test' : tab === 'matrix' ? 'Matrix Test' : tab === 'k8s' ? 'Kubernetes' : 'Interactive'}</button>
         ))}
       </div>
       
-      <div className="grid" style={{ gridTemplateColumns: activeTab === 'interactive' && interactiveTestId ? '1fr' : '1fr 1fr', gap: 24 }}>
-        <div>
-          <Card title={activeTab === 'jmx' ? 'Run JMeter Test' : activeTab === 'matrix' ? 'Matrix Test' : 'Start Interactive Test'}>
-            {activeTab === 'jmx' && <JmxTestForm onSubmit={runJmxTest} loading={submitting} />}
-            {activeTab === 'matrix' && <MatrixTestForm onSubmit={runMatrixTest} loading={submitting} />}
-            {activeTab === 'interactive' && <InteractiveTestForm onSubmit={startInteractive} loading={submitting} />}
-          </Card>
-        </div>
-        <div>
-          {activeTab === 'interactive' && interactiveTestId ? (
-            <InteractiveMonitor testId={interactiveTestId} />
-          ) : (
-            <Card title="Recent Tests">
-              {loading ? <div className="skeleton" style={{ height: 200 }} /> : <TestList tests={tests.slice(0, 5)} onSelect={t => navigate(`/test/${t.id}`)} />}
+      {activeTab === 'k8s' ? (
+        <K8sTab />
+      ) : (
+        <div className="grid" style={{ gridTemplateColumns: activeTab === 'interactive' && interactiveTestId ? '1fr' : '1fr 1fr', gap: 24 }}>
+          <div>
+            <Card title={activeTab === 'jmx' ? 'Run JMeter Test' : activeTab === 'matrix' ? 'Matrix Test' : 'Start Interactive Test'}>
+              {activeTab === 'jmx' && <JmxTestForm onSubmit={runJmxTest} loading={submitting} />}
+              {activeTab === 'matrix' && <MatrixTestForm onSubmit={runMatrixTest} loading={submitting} />}
+              {activeTab === 'interactive' && <InteractiveTestForm onSubmit={startInteractive} loading={submitting} />}
             </Card>
-          )}
+          </div>
+          <div>
+            {activeTab === 'interactive' && interactiveTestId ? (
+              <InteractiveMonitor testId={interactiveTestId} />
+            ) : (
+              <Card title="Recent Tests">
+                {loading ? <div className="skeleton" style={{ height: 200 }} /> : <TestList tests={tests.slice(0, 5)} onSelect={t => navigate(`/test/${t.id}`)} />}
+              </Card>
+            )}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   )
 }

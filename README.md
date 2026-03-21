@@ -16,6 +16,7 @@ LoadPilot helps you find the optimal pod configuration for your Kubernetes workl
 | **Test Controls** | Start, stop, pause, resume, scale load dynamically |
 | **Cost Analysis** | Real-time cloud cost calculation (AWS, GCP, Azure) |
 | **Performance Scoring** | Weighted scoring based on latency, throughput, cost, errors |
+| **Kubernetes Integration** | Connect to real clusters, deploy test pods, scale dynamically |
 
 ---
 
@@ -193,6 +194,21 @@ curl -X POST http://localhost:8000/api/load-test/<TEST_ID>/stop
 |--------|----------|-------------|
 | GET | `/api/jmeter/check` | Check JMeter installation |
 
+### Kubernetes Endpoints
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/k8s/status` | Get cluster connection status |
+| POST | `/api/k8s/connect` | Connect to Kubernetes cluster |
+| POST | `/api/k8s/disconnect` | Disconnect from cluster |
+| GET | `/api/k8s/namespaces` | List namespaces |
+| POST | `/api/k8s/deploy` | Deploy test pods |
+| GET | `/api/k8s/deployments` | List LoadPilot deployments |
+| GET | `/api/k8s/deployments/:id` | Get deployment details |
+| DELETE | `/api/k8s/deployments/:id` | Delete deployment |
+| POST | `/api/k8s/deployments/:id/scale` | Scale deployment |
+| GET | `/api/k8s/metrics` | Get cluster metrics |
+
 ---
 
 ## Parameters
@@ -282,7 +298,8 @@ loadpilot/
 │   ├── simulator.py          # Matrix test simulator
 │   ├── cost_calculator.py    # Cloud cost calculation
 │   ├── ollama_client.py      # AI/Ollama integration
-│   └── test_runner.py        # Interactive test runner
+│   ├── test_runner.py        # Interactive test runner
+│   └── k8s_client.py        # Kubernetes client
 └── frontend/
     ├── package.json
     ├── vite.config.js
@@ -290,9 +307,7 @@ loadpilot/
         ├── App.jsx
         ├── index.css
         └── pages/
-            ├── Dashboard.jsx
-            ├── NewTest.jsx
-            └── TestResults.jsx
+            └── Dashboard.jsx
 ```
 
 ---
@@ -330,13 +345,72 @@ ollama pull llama3.2
 
 ---
 
+### Example 4: Kubernetes Integration
+
+```bash
+# Connect to Kubernetes cluster (uses kubeconfig or in-cluster config)
+curl -X POST "http://localhost:8000/api/k8s/connect?namespace=default"
+
+# Check connection status
+curl http://localhost:8000/api/k8s/status
+
+# Deploy test pods with specific configuration
+curl -X POST "http://localhost:8000/api/k8s/deploy?name=load-test&cpu_millicores=500&memory_mb=512&replicas=2&image=nginx&namespace=default"
+
+# List all LoadPilot deployments
+curl http://localhost:8000/api/k8s/deployments
+
+# Scale a deployment (replace DEPLOYMENT_ID)
+curl -X POST "http://localhost:8000/api/k8s/deployments/DEPLOYMENT_ID/scale?replicas=4"
+
+# Get cluster metrics
+curl "http://localhost:8000/api/k8s/metrics?namespace=default"
+
+# Delete a deployment
+curl -X DELETE "http://localhost:8000/api/k8s/deployments/DEPLOYMENT_ID"
+
+# Disconnect from cluster
+curl -X POST http://localhost:8000/api/k8s/disconnect
+```
+
+---
+
+## Prerequisites (Kubernetes)
+
+| Component | Required | Install |
+|-----------|----------|---------|
+| kubectl | Yes | [kubernetes.io/docs](https://kubernetes.io/docs/tasks/tools/) |
+| kubeconfig | Yes | `~/.kube/config` or cluster config |
+
+### Setup kubectl
+
+```bash
+# macOS
+brew install kubectl
+
+# Verify installation
+kubectl version --client
+```
+
+### Configure Cluster Access
+
+```bash
+# Default kubeconfig (~/.kube/config)
+kubectl config get-contexts
+
+# For specific cluster
+kubectl config use-context my-cluster
+```
+
+---
+
 ## Roadmap
 
 - [x] Matrix testing (CPU/RAM/Replicas)
 - [x] JMX file execution
 - [x] AI recommendations (Ollama)
 - [x] Test controls (stop/start/scale)
-- [ ] Real Kubernetes integration
+- [x] Real Kubernetes integration
 - [ ] CI/CD pipeline hooks
 - [ ] GitOps output (Helm/Kustomize)
 - [ ] Historical trend analysis
