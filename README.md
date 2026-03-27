@@ -54,6 +54,7 @@ Server runs at: **http://localhost:8000**
 Visit **http://localhost:8000/docs** for interactive API documentation.
 
 ---
+<img width="1264" height="847" alt="image" src="https://github.com/user-attachments/assets/e47348f8-0932-4ce5-863e-9d3aaf012db9" />
 
 ## Usage Examples
 
